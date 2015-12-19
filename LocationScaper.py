@@ -8,6 +8,8 @@ import Quandl
 import datetime
 import calendar
 import pandas
+import numpy as np
+import scipy as sp
 
 wikipediaBase = "https://en.wikipedia.org/w/api.php?action=query&prop=revisions|coordinates&rvprop=content&format=json&redirects=&titles="
 wikiUAHeader = { "User-Agent" : "(Mining research data collector, for problems contact luke@lukecartwright.com)" }
@@ -63,44 +65,75 @@ def getCommodityPrice(type, date):
 
     return commodityPrices[type][date]
 
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--md", help="Reload the mine data from wikipedia",
                         action="store_true")
+    parser.add_argument("--ms", help="Reload the mine sizes from earth engine",
+                        action="store_true")
+    parser.add_argument("--verbose", help="Verbose output",
+                        action="store_true")
     args = parser.parse_args()
 
-    #Get Mine Data
+    #Get Mine location Data
     if not os.path.isfile(mineDataFile) or args.md:
         mineNames = fetchMineNames()
-        mineData = []
+        mineList = []
         for mineName in mineNames:
             mineLocation, mineProducts = fetchMineData(mineName)
             if(mineLocation is not None and mineProducts):
-                mineData.append((mineLocation, mineProducts))
-                #print(mineName + " (lat: " + str(mineLocation[0]) + ", lon: " + str(mineLocation[1]) + "), which produces: " + ", ".join(mineProducts) + ".")
+                mineList.append({ 'location' : mineLocation, 'products' : mineProducts })
+                if args.verbose:
+                    print(mineName + " (lat: " + str(mineLocation[0]) + ", lon: " + str(mineLocation[1]) + "), which produces: " + ", ".join(mineProducts) + ".")
+        #Save the data so it doesn't need loading next time
         fp = open(mineDataFile, 'w')
-        json.dump(mineData, fp)
+        json.dump(mineList, fp)
         fp.close()
     else:
+        #Load the saved data
         fp = open(mineDataFile, 'r')
-        mineData = json.load(fp)
+        mineList = json.load(fp)
         fp.close()
 
-    #Get Mine Data from Earth Engine
-    for mine in mineData[0:1]:
-        ee.Initialize()
-        eviCollection = ee.ImageCollection("MODIS/MCD43A4_EVI")
-        mineVegetation = mineChangeTime(eviCollection, mine[0][1], mine[0][0], mineDifference)
-        controlVegetation = mineChangeTime(eviCollection, mine[0][1], mine[0][0], controlDifference)
-        for mine, control in zip(mineVegetation, controlVegetation):
-            if(mine[1] is not None and control[1] is not None):
-                result = 1 - (mine[1] / (control[1] - mine[1] + 0.1))
-                curDate = pandas.to_datetime(mine[0], unit='ms')
-                priceg = getCommodityPrice('Gold', curDate)
-                prices = getCommodityPrice('Silver', curDate)
-                print str(mine[0]) + ", "+ str(result) + ", "+ str(priceg) + ", "+ str(prices)
+    #Get Mine Size Data from Earth Engine
+    ee.Initialize()
+    for mineData in mineList[0:1]:
+        if args.ms or not 'size' in mineData:
+            eviCollection = ee.ImageCollection("MODIS/MOD09GA_EVI")
+            mineVegetation = mineChangeTime(eviCollection,
+                                            mineData['location'][1], mineData['location'][0], mineDifference)
+            controlVegetation = mineChangeTime(eviCollection,
+                                               mineData['location'][1], mineData['location'][0], controlDifference)
+            for mineSize, controlSize in zip(mineVegetation, controlVegetation):
+                if(mineSize[1] is not None and controlSize[1] is not None):
+                    seasonScaledSize = 1 - (mineSize[1] / (controlSize[1] - mineSize[1] + 0.1))
+                    curDate = pandas.to_datetime(mineSize[0], unit='ms')
+                    if args.verbose:
+                        #Verbose output in csv format of mine size and prices at each timestep
+                        printBase = str(mineSize[0]) + ", " + str(seasonScaledSize)
+                        for commodity in mineData['products']:
+                            cPrice = getCommodityPrice(commodity, curDate)
+                            printBase = printBase + ", "+ str(cPrice)
+                        print printBase
+                    mineData['size'] = (seasonScaledSize, curDate)
+        #save the mine data from earth engine for later
+        fp = open(mineDataFile, 'w')
+        json.dump(mineList, fp)
+        fp.close()
+
+
+    predictRange = 45
+    for mineData in mineList[0:1]:
+        RSquared = {}
+        for commodity in mineData['products']:
+            RSquared[commodity] = {}
+            prices = []
+            for mineSize, date in mineData['size']:
+                prices.append(getCommodityPrice(commodity, date))
+            #for td in pandas.to_timedelta(np.arange(-predictRange, predictRange), unit='d'):
+            scipy.linregress()
+
+
 
     print(mineData)
 
